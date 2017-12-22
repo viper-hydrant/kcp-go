@@ -11,6 +11,7 @@ import (
 
 	"github.com/pkg/errors"
 	"golang.org/x/net/ipv4"
+	"fmt"
 )
 
 type errTimeout struct {
@@ -113,7 +114,7 @@ type (
 )
 
 // newUDPSession create a new udp session for client or server
-func newUDPSession(conv uint32, dataShards, parityShards int, l *Listener, conn net.PacketConn, remote net.Addr, block BlockCrypt) *UDPSession {
+func newUDPSession(conv uint16, srcPort uint16, dataShards, parityShards int, l *Listener, conn net.PacketConn, remote net.Addr, block BlockCrypt) *UDPSession {
 	sess := new(UDPSession)
 	sess.die = make(chan struct{})
 	sess.chReadEvent = make(chan struct{}, 1)
@@ -147,7 +148,7 @@ func newUDPSession(conv uint32, dataShards, parityShards int, l *Listener, conn 
 		sess.ext = make([]byte, mtuLimit)
 	}
 
-	sess.kcp = NewKCP(conv, func(buf []byte, size int) {
+	sess.kcp = NewKCP(conv, srcPort, func(buf []byte, size int) {
 		if size >= IKCP_OVERHEAD {
 			sess.output(buf[:size])
 		}
@@ -307,8 +308,9 @@ func (s *UDPSession) Close() error {
 	// remove this session from updater & listener(if necessary)
 	updater.removeSession(s)
 	if s.l != nil { // notify listener
+		src := fmt.Sprintf("%s:%d", s.remote.(*net.UDPAddr).IP.To4(), s.kcp.srcPort)
 		s.l.closeSession(sessionKey{
-			addr:   string(s.remote.(*net.UDPAddr).IP),
+			addr:   src,
 			convID: s.kcp.conv,
 		})
 	}
@@ -525,7 +527,7 @@ func (s *UDPSession) update() (interval time.Duration) {
 }
 
 // GetConv gets conversation id of a session
-func (s *UDPSession) GetConv() uint32 { return s.kcp.conv }
+func (s *UDPSession) GetConv() uint16 { return s.kcp.conv }
 
 func (s *UDPSession) notifyReadEvent() {
 	select {
@@ -665,7 +667,7 @@ func (s *UDPSession) readLoop() {
 type (
 	sessionKey struct {
 		addr   string
-		convID uint32
+		convID uint16
 	}
 
 	// Listener defines a server listening for connections
@@ -722,22 +724,27 @@ func (l *Listener) monitor() {
 			}
 
 			if dataValid {
-				var conv uint32
+				var conv, srcPort uint16
 				convValid := false
 				if l.fecDecoder != nil {
 					isfec := binary.LittleEndian.Uint16(data[4:])
 					if isfec == typeData {
-						conv = binary.LittleEndian.Uint32(data[fecHeaderSizePlus2:])
+						conv = binary.LittleEndian.Uint16(data[fecHeaderSizePlus2:])
+						srcPort = binary.LittleEndian.Uint16(data[fecHeaderSizePlus2+2:])
 						convValid = true
 					}
 				} else {
-					conv = binary.LittleEndian.Uint32(data)
+					conv = binary.LittleEndian.Uint16(data)
+					srcPort = binary.LittleEndian.Uint16(data[2:])
 					convValid = true
 				}
 
 				if convValid {
+
+					src := fmt.Sprintf("%s:%d", from.(*net.UDPAddr).IP.To4(), srcPort)
+
 					key := sessionKey{
-						addr:   string(from.(*net.UDPAddr).IP),
+						addr:   src,
 						convID: conv,
 					}
 					var s *UDPSession
@@ -754,7 +761,7 @@ func (l *Listener) monitor() {
 
 					if !ok { // new session
 						if len(l.chAccepts) < cap(l.chAccepts) && len(l.sessions) < 4096 { // do not let new session overwhelm accept queue and connection count
-							s := newUDPSession(conv, l.dataShards, l.parityShards, l, l.conn, from, l.block)
+							s := newUDPSession(conv, srcPort, l.dataShards, l.parityShards, l, l.conn, from, l.block)
 							s.kcpInput(data)
 							l.sessions[key] = s
 							l.chAccepts <- s
@@ -946,9 +953,11 @@ func NewConn(raddr string, block BlockCrypt, dataShards, parityShards int, conn 
 		return nil, errors.Wrap(err, "net.ResolveUDPAddr")
 	}
 
-	var convid uint32
+	var convid, srcPort uint16
 	binary.Read(rand.Reader, binary.LittleEndian, &convid)
-	return newUDPSession(convid, dataShards, parityShards, nil, conn, udpaddr, block), nil
+	srcPort = uint16(conn.LocalAddr().(*net.UDPAddr).Port)
+
+	return newUDPSession(convid, srcPort, dataShards, parityShards, nil, conn, udpaddr, block), nil
 }
 
 // returns current time in milliseconds

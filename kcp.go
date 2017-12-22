@@ -93,7 +93,8 @@ func _itimediff(later, earlier uint32) int32 {
 
 // segment defines a KCP segment
 type segment struct {
-	conv     uint32
+	conv     uint16
+	srcPort  uint16
 	cmd      uint8
 	frg      uint8
 	wnd      uint16
@@ -109,7 +110,8 @@ type segment struct {
 
 // encode a segment into buffer
 func (seg *segment) encode(ptr []byte) []byte {
-	ptr = ikcp_encode32u(ptr, seg.conv)
+	ptr = ikcp_encode16u(ptr, seg.conv)
+	ptr = ikcp_encode16u(ptr, seg.srcPort)
 	ptr = ikcp_encode8u(ptr, seg.cmd)
 	ptr = ikcp_encode8u(ptr, seg.frg)
 	ptr = ikcp_encode16u(ptr, seg.wnd)
@@ -123,7 +125,8 @@ func (seg *segment) encode(ptr []byte) []byte {
 
 // KCP defines a single KCP connection
 type KCP struct {
-	conv, mtu, mss, state                  uint32
+	conv, srcPort 								uint16
+	mtu, mss, state                  	uint32
 	snd_una, snd_nxt, rcv_nxt              uint32
 	ssthresh                               uint32
 	rx_rttvar, rx_srtt                     int32
@@ -155,9 +158,10 @@ type ackItem struct {
 
 // NewKCP create a new kcp control object, 'conv' must equal in two endpoint
 // from the same connection.
-func NewKCP(conv uint32, output output_callback) *KCP {
+func NewKCP(conv uint16, srcPort uint16, output output_callback) *KCP {
 	kcp := new(KCP)
 	kcp.conv = conv
+	kcp.srcPort = srcPort
 	kcp.snd_wnd = IKCP_WND_SND
 	kcp.rcv_wnd = IKCP_WND_RCV
 	kcp.rmt_wnd = IKCP_WND_RCV
@@ -497,7 +501,8 @@ func (kcp *KCP) Input(data []byte, regular, ackNoDelay bool) int {
 	var inSegs uint64
 
 	for {
-		var ts, sn, length, una, conv uint32
+		var conv, srcPort uint16
+		var ts, sn, length, una uint32
 		var wnd uint16
 		var cmd, frg uint8
 
@@ -505,10 +510,11 @@ func (kcp *KCP) Input(data []byte, regular, ackNoDelay bool) int {
 			break
 		}
 
-		data = ikcp_decode32u(data, &conv)
+		data = ikcp_decode16u(data, &conv)
 		if conv != kcp.conv {
 			return -1
 		}
+		data = ikcp_decode16u(data, &srcPort)
 
 		data = ikcp_decode8u(data, &cmd)
 		data = ikcp_decode8u(data, &frg)
@@ -550,6 +556,7 @@ func (kcp *KCP) Input(data []byte, regular, ackNoDelay bool) int {
 				if _itimediff(sn, kcp.rcv_nxt) >= 0 {
 					seg := kcp.newSegment(int(length))
 					seg.conv = conv
+					seg.srcPort = srcPort
 					seg.cmd = cmd
 					seg.frg = frg
 					seg.wnd = wnd
@@ -626,6 +633,7 @@ func (kcp *KCP) wnd_unused() uint16 {
 func (kcp *KCP) flush(ackOnly bool) {
 	var seg segment
 	seg.conv = kcp.conv
+	seg.srcPort = kcp.srcPort
 	seg.cmd = IKCP_CMD_ACK
 	seg.wnd = kcp.wnd_unused()
 	seg.una = kcp.rcv_nxt
@@ -717,6 +725,7 @@ func (kcp *KCP) flush(ackOnly bool) {
 		}
 		newseg := kcp.snd_queue[k]
 		newseg.conv = kcp.conv
+		newseg.srcPort = kcp.srcPort
 		newseg.cmd = IKCP_CMD_PUSH
 		newseg.sn = kcp.snd_nxt
 		kcp.snd_buf = append(kcp.snd_buf, newseg)
