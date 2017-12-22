@@ -308,7 +308,7 @@ func (s *UDPSession) Close() error {
 	updater.removeSession(s)
 	if s.l != nil { // notify listener
 		s.l.closeSession(sessionKey{
-			addr:   s.remote.String(),
+			addr:   string(s.remote.(*net.UDPAddr).IP),
 			convID: s.kcp.conv,
 		})
 	}
@@ -737,7 +737,7 @@ func (l *Listener) monitor() {
 
 				if convValid {
 					key := sessionKey{
-						addr:   from.String(),
+						addr:   string(from.(*net.UDPAddr).IP),
 						convID: conv,
 					}
 					var s *UDPSession
