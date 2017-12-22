@@ -11,7 +11,6 @@ import (
 
 	"github.com/pkg/errors"
 	"golang.org/x/net/ipv4"
-	"fmt"
 )
 
 type errTimeout struct {
@@ -308,11 +307,10 @@ func (s *UDPSession) Close() error {
 	// remove this session from updater & listener(if necessary)
 	updater.removeSession(s)
 	if s.l != nil { // notify listener
-		src := fmt.Sprintf("%s:%d", s.remote.(*net.UDPAddr).IP.To4(), s.kcp.srcPort)
-		s.l.closeSession(sessionKey{
-			addr:   src,
-			convID: s.kcp.conv,
-		})
+		sk := sessionKey{convID:s.kcp.conv}
+		copy(sk.addr[:],s.remote.(*net.UDPAddr).IP.To4())
+		binary.LittleEndian.PutUint16(sk.addr[4:], s.kcp.srcPort)
+		s.l.closeSession(sk)
 	}
 
 	s.mu.Lock()
@@ -666,7 +664,7 @@ func (s *UDPSession) readLoop() {
 
 type (
 	sessionKey struct {
-		addr   string
+		addr   [6]byte
 		convID uint16
 	}
 
@@ -741,12 +739,9 @@ func (l *Listener) monitor() {
 
 				if convValid {
 
-					src := fmt.Sprintf("%s:%d", from.(*net.UDPAddr).IP.To4(), srcPort)
-
-					key := sessionKey{
-						addr:   src,
-						convID: conv,
-					}
+					key := sessionKey{convID: conv}
+					copy(key.addr[:], from.(*net.UDPAddr).IP.To4())
+					binary.LittleEndian.PutUint16(key.addr[4:], srcPort)
 					var s *UDPSession
 					var ok bool
 
