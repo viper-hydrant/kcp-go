@@ -742,6 +742,7 @@ func (l *Listener) monitor() {
 					key := sessionKey{convID: conv}
 					copy(key.addr[:], from.(*net.UDPAddr).IP.To4())
 					binary.LittleEndian.PutUint16(key.addr[4:], srcPort)
+
 					var s *UDPSession
 					var ok bool
 
@@ -880,8 +881,11 @@ func (l *Listener) closeSession(key sessionKey) bool {
 // Addr returns the listener's network address, The Addr returned is shared by all invocations of Addr, so do not modify it.
 func (l *Listener) Addr() net.Addr { return l.conn.LocalAddr() }
 
-// Listen listens for incoming KCP packets addressed to the local address laddr on the network "udp",
+// Listen listens for incoming KCP packets addressed to the local address laddr on the network "udp"
 func Listen(laddr string) (net.Listener, error) { return ListenWithOptions(laddr, nil, 0, 0) }
+
+// ListenC listens for incoming KCP packets on the provided UDP connection
+func ListenC(conn *net.UDPConn) (net.Listener, error) { return ListenWithOptionsC(conn, nil, 0, 0) }
 
 // ListenWithOptions listens for incoming KCP packets addressed to the local address laddr on the network "udp" with packet encryption,
 // dataShards, parityShards defines Reed-Solomon Erasure Coding parameters
@@ -895,6 +899,12 @@ func ListenWithOptions(laddr string, block BlockCrypt, dataShards, parityShards 
 		return nil, errors.Wrap(err, "net.ListenUDP")
 	}
 
+	return ServeConn(block, dataShards, parityShards, conn)
+}
+
+// ListenWithOptionsC listens for incoming KCP packets on the provided UDP connection with packet encryption,
+// dataShards, parityShards defines Reed-Solomon Erasure Coding parameters
+func ListenWithOptionsC(conn *net.UDPConn, block BlockCrypt, dataShards, parityShards int) (*Listener, error) {
 	return ServeConn(block, dataShards, parityShards, conn)
 }
 
@@ -926,6 +936,9 @@ func ServeConn(block BlockCrypt, dataShards, parityShards int, conn net.PacketCo
 // Dial connects to the remote address "raddr" on the network "udp"
 func Dial(raddr string) (net.Conn, error) { return DialWithOptions(raddr, nil, 0, 0) }
 
+// DialC connects to the remote host using the provided UDP connection
+func DialC(conn *net.UDPConn) (net.Conn, error) { return DialWithOptionsC(conn, nil, 0, 0) }
+
 // DialWithOptions connects to the remote address "raddr" on the network "udp" with packet encryption
 func DialWithOptions(raddr string, block BlockCrypt, dataShards, parityShards int) (*UDPSession, error) {
 	udpaddr, err := net.ResolveUDPAddr("udp", raddr)
@@ -941,6 +954,11 @@ func DialWithOptions(raddr string, block BlockCrypt, dataShards, parityShards in
 	return NewConn(raddr, block, dataShards, parityShards, &connectedUDPConn{udpconn})
 }
 
+// DialWithOptionsC connects to the remote host using the provided UDP connection with packet encryption
+func DialWithOptionsC(udpconn *net.UDPConn,  block BlockCrypt, dataShards, parityShards int) (*UDPSession, error) {
+	return NewConn(udpconn.RemoteAddr().String(), block, dataShards, parityShards, &connectedUDPConn{udpconn})
+}
+
 // NewConn establishes a session and talks KCP protocol over a packet connection.
 func NewConn(raddr string, block BlockCrypt, dataShards, parityShards int, conn net.PacketConn) (*UDPSession, error) {
 	udpaddr, err := net.ResolveUDPAddr("udp", raddr)
@@ -950,6 +968,7 @@ func NewConn(raddr string, block BlockCrypt, dataShards, parityShards int, conn 
 
 	var convid, srcPort uint16
 	binary.Read(rand.Reader, binary.LittleEndian, &convid)
+
 	srcPort = uint16(conn.LocalAddr().(*net.UDPAddr).Port)
 
 	return newUDPSession(convid, srcPort, dataShards, parityShards, nil, conn, udpaddr, block), nil
